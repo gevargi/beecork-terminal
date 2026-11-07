@@ -19,7 +19,7 @@ import {
 import { resumeCommand } from "../lib/sessions";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText, readText } from "../lib/clipboard";
-import { clipboardKeyAction, isModifierOnly, keySelRange, shiftArrowDir } from "../lib/termKeys";
+import { clipboardKeyAction, isModifierOnly, keySelRange, moveKeySelHead, shiftArrowDir } from "../lib/termKeys";
 import { withGeorgian } from "../lib/fonts";
 import * as sound from "../lib/sound";
 import ContextMenu, { type MenuEntry } from "./ContextMenu";
@@ -388,8 +388,21 @@ export default function TerminalPane({
     // cursor's linear offset when the selection began, `head` where the arrows
     // have moved it. Lives only in this closure: one per terminal.
     let keySel: { anchor: number; head: number } | null = null;
+    // Column just past a row's last non-blank cell, so the highlight stops at
+    // the last letter instead of running on into empty cells. Cell by cell, not
+    // translateToString().length: a wide (CJK) char is one string unit but two
+    // cells, and its second cell is width 0 with no chars.
+    const rowTextEnd = (row: number) => {
+      const line = term.buffer.active.getLine(row);
+      if (!line) return 0;
+      for (let x = Math.min(line.length, term.cols) - 1; x >= 0; x--) {
+        const cell = line.getCell(x);
+        if (cell && (cell.getWidth() === 0 || cell.getChars().trim() !== "")) return x + 1;
+      }
+      return 0;
+    };
     const applyKeySel = () => {
-      const range = keySel && keySelRange(keySel.anchor, keySel.head);
+      const range = keySel && keySelRange(keySel.anchor, keySel.head, term.cols, rowTextEnd);
       if (!range) {
         term.clearSelection();
         return;
@@ -417,7 +430,7 @@ export default function TerminalPane({
             const at = (buf.baseY + buf.cursorY) * cols + Math.min(buf.cursorX, cols - 1);
             keySel = { anchor: at, head: at };
           }
-          keySel.head = Math.max(0, Math.min(buf.length * cols, keySel.head + dir));
+          keySel.head = moveKeySelHead(keySel.head, dir, cols, rowTextEnd);
           queueMicrotask(applyKeySel);
           return true;
         }

@@ -61,10 +61,45 @@ export function isModifierOnly(e: Pick<KeyboardEvent, "key">): boolean {
   return e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta";
 }
 
+/** Column just past the last non-blank cell of buffer row `row` (0 = blank row). */
+export type RowTextEnd = (row: number) => number;
+
+/** The blank cells after a line's text are not text: a highlight running into
+ *  them reads as "selected empty space" (Word stops at the last letter). Pull a
+ *  selection END that sits in that trailing blank run back to the text's end,
+ *  row by row, so a range ending on an empty row stops at the previous row's
+ *  text. Spaces BETWEEN words are kept — only the blank tail is dropped. */
+function clipToText(start: number, end: number, cols: number, textEnd: RowTextEnd): number {
+  while (end > start) {
+    const row = Math.floor((end - 1) / cols);
+    const te = row * cols + textEnd(row);
+    if (end <= te) break;
+    end = Math.max(start, te);
+    if (te > row * cols) break;
+  }
+  return end;
+}
+
 /** Selected cells between the anchor (cursor when selection began) and the head
  *  (where the arrows have moved it): `start` offset and `length`, or null when
- *  the head is back on the anchor (nothing selected). */
-export function keySelRange(anchor: number, head: number): { start: number; length: number } | null {
-  if (head === anchor) return null;
-  return { start: Math.min(anchor, head), length: Math.abs(head - anchor) };
+ *  nothing — or only the blank tail after the text — is covered. */
+export function keySelRange(
+  anchor: number,
+  head: number,
+  cols: number,
+  textEnd: RowTextEnd,
+): { start: number; length: number } | null {
+  const start = Math.min(anchor, head);
+  const end = clipToText(start, Math.max(anchor, head), cols, textEnd);
+  return end > start ? { start, length: end - start } : null;
+}
+
+/** Where Shift+Left/Right moves the selection head. Right stops at the end of
+ *  the text on the head's row — the program's cursor stops there too, so a head
+ *  that kept walking into blank cells would drift away from it and need as many
+ *  extra Left presses to come back. */
+export function moveKeySelHead(head: number, dir: -1 | 1, cols: number, textEnd: RowTextEnd): number {
+  if (dir < 0) return Math.max(0, head - 1);
+  const row = Math.floor(head / cols);
+  return head < row * cols + textEnd(row) ? head + 1 : head;
 }
